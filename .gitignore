@@ -1,0 +1,34 @@
+# Ignorar dependencias
+node_modules/
+i2V/node_modules/
+venv/
+.venv*/
+Guion_expert/venv/
+__pycache__/
+.next/
+
+# Ignorar outputs pesados de video y render
+output/
+output_renders/
+tmp/
+*.mp4
+*.webm
+*.mov
+OpenMontage_montaje_3SM.mp4
+
+# Ignorar notebooks pesados
+*.ipynb
+.ipynb_checkpoints/
+
+# Ignorar documentos PDF autogenerados
+*.pdf
+i2V_*.pdf
+OpenMontage_*.pdf
+
+# Configuración del entorno
+.env
+.env.*
+!.env.example
+
+# Ignorar mac OS
+.DS_Store
