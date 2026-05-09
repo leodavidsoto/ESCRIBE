@@ -21,7 +21,7 @@ pytest-asyncio>=0.21.0
 pytest-cov>=4.1.0
 
 # Video/Media processing
-ffmpeg-python>=0.2.1
+ffmpeg-python>=0.2.0
 moviepy>=1.0.3
 
 # Optional: ML/CLIP validation
