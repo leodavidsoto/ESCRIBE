@@ -13,7 +13,11 @@ if str(guion_expert_path) not in sys.path:
     sys.path.insert(0, str(guion_expert_path))
 
 # Import and re-export the Flask app
-from webapp.server import app
+try:
+    from Guion_expert.webapp.server import app
+except ImportError:
+    # Fallback for when running from repo root
+    from webapp.server import app
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
