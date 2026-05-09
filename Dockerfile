@@ -37,4 +37,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:${PORT:-5000}/health || exit 1
 
 # Default command (can be overridden by Procfile in Railway)
-CMD ["gunicorn", "--workers", "4", "--threads", "2", "--worker-class", "sync", "--timeout", "120", "--bind", "0.0.0.0:${PORT:-5000}", "app:app"]
+# Use shell form to allow environment variable expansion
+CMD gunicorn --workers 4 --threads 2 --worker-class sync --timeout 120 --bind 0.0.0.0:${PORT:-5000} app:app
