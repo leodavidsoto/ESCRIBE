@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Any, Literal, Optional
 from dataclasses import dataclass
@@ -19,6 +20,8 @@ except ImportError:
     HAS_HTTPX = False
 
 log = logging.getLogger("muapi_gateway")
+
+_SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 @dataclass
@@ -83,6 +86,42 @@ class MuapiGateway:
 
         if not self.api_key:
             log.warning("MUAPI_KEY not configured; generation will fail")
+
+    def _output_path(self, prefix: str, seed: str, suffix: str) -> Path:
+        safe_seed = _SAFE_FILENAME_RE.sub("-", seed).strip("._-")[:48] or "output"
+        return Path("/tmp") / f"escribe_{prefix}_{safe_seed}{suffix}"
+
+    def _extract_output_url(self, payload: Any) -> Optional[str]:
+        if isinstance(payload, str) and payload.startswith(("http://", "https://")):
+            return payload
+        if isinstance(payload, dict):
+            for key in ("url", "output_url", "image_url", "video_url", "audio_url"):
+                value = payload.get(key)
+                if isinstance(value, str) and value.startswith(("http://", "https://")):
+                    return value
+            for key in ("data", "output", "outputs", "result", "results"):
+                nested = payload.get(key)
+                found = self._extract_output_url(nested)
+                if found:
+                    return found
+        if isinstance(payload, list):
+            for item in payload:
+                found = self._extract_output_url(item)
+                if found:
+                    return found
+        return None
+
+    async def _download_output(self, url: str, output_path: Path) -> Path:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        async with self.client.stream("GET", url, follow_redirects=True) as response:
+            response.raise_for_status()
+            with output_path.open("wb") as handle:
+                async for chunk in response.aiter_bytes():
+                    if chunk:
+                        handle.write(chunk)
+        if not output_path.exists() or output_path.stat().st_size == 0:
+            raise RuntimeError(f"Downloaded output is empty: {url}")
+        return output_path
 
     async def generate_image(
         self,
@@ -209,16 +248,27 @@ class MuapiGateway:
             )
 
         result = response.json()
-        # Save image locally
-        output_path = Path(f"/tmp/escribe_image_{Path(prompt[:30]).name}.png")
-        # In production, download from result['url']
+        output_url = self._extract_output_url(result)
+        if not output_url:
+            return GenerationResult(
+                success=False,
+                error="Muapi T2I response did not include an output URL",
+                metadata=result,
+            )
+        output_path = await self._download_output(
+            output_url,
+            self._output_path("image", prompt[:30], ".png"),
+        )
         log.info("t2i_success", extra={"model": model, "output": str(output_path)})
 
         return GenerationResult(
             success=True,
             output_path=output_path,
             model=model,
-            metadata=result.get("metadata", {})
+            metadata={
+                **(result.get("metadata", {}) if isinstance(result, dict) else {}),
+                "output_url": output_url,
+            }
         )
 
     async def _invoke_i2i(
@@ -253,7 +303,17 @@ class MuapiGateway:
             )
 
         result = response.json()
-        output_path = Path(f"/tmp/escribe_image_i2i_{Path(image_input.stem).name}.png")
+        output_url = self._extract_output_url(result)
+        if not output_url:
+            return GenerationResult(
+                success=False,
+                error="Muapi I2I response did not include an output URL",
+                metadata=result,
+            )
+        output_path = await self._download_output(
+            output_url,
+            self._output_path("image_i2i", image_input.stem, ".png"),
+        )
 
         log.info("i2i_success", extra={"model": model, "output": str(output_path)})
 
@@ -261,7 +321,10 @@ class MuapiGateway:
             success=True,
             output_path=output_path,
             model=model,
-            metadata=result.get("metadata", {})
+            metadata={
+                **(result.get("metadata", {}) if isinstance(result, dict) else {}),
+                "output_url": output_url,
+            }
         )
 
     async def _invoke_t2v(
@@ -289,8 +352,23 @@ class MuapiGateway:
             )
 
         result = response.json()
+        output_url = self._extract_output_url(result)
+        if output_url:
+            output_path = await self._download_output(
+                output_url,
+                self._output_path("video", Path(prompt[:30]).name, ".mp4"),
+            )
+            return GenerationResult(
+                success=True,
+                output_path=output_path,
+                model=model,
+                metadata={
+                    **(result.get("metadata", {}) if isinstance(result, dict) else {}),
+                    "output_url": output_url,
+                },
+            )
         # Poll for completion if async
-        job_id = result.get("id")
+        job_id = result.get("id") if isinstance(result, dict) else None
         output_path = await self._poll_job(job_id, model)
 
         if not output_path:
@@ -305,7 +383,7 @@ class MuapiGateway:
             success=True,
             output_path=output_path,
             model=model,
-            metadata=result.get("metadata", {})
+            metadata=result.get("metadata", {}) if isinstance(result, dict) else {}
         )
 
     async def _invoke_i2v(
@@ -340,7 +418,22 @@ class MuapiGateway:
             )
 
         result = response.json()
-        job_id = result.get("id")
+        output_url = self._extract_output_url(result)
+        if output_url:
+            output_path = await self._download_output(
+                output_url,
+                self._output_path("video_i2v", image_input.stem, ".mp4"),
+            )
+            return GenerationResult(
+                success=True,
+                output_path=output_path,
+                model=model,
+                metadata={
+                    **(result.get("metadata", {}) if isinstance(result, dict) else {}),
+                    "output_url": output_url,
+                },
+            )
+        job_id = result.get("id") if isinstance(result, dict) else None
         output_path = await self._poll_job(job_id, model)
 
         if not output_path:
@@ -355,11 +448,13 @@ class MuapiGateway:
             success=True,
             output_path=output_path,
             model=model,
-            metadata=result.get("metadata", {})
+            metadata=result.get("metadata", {}) if isinstance(result, dict) else {}
         )
 
     async def _poll_job(self, job_id: str, model: str, timeout: int = 600) -> Optional[Path]:
         """Poll Muapi job until completion."""
+        if not job_id:
+            return None
         start = asyncio.get_event_loop().time()
 
         while asyncio.get_event_loop().time() - start < timeout:
@@ -376,10 +471,12 @@ class MuapiGateway:
             status = result.get("status")
 
             if status == "completed":
-                output_url = result.get("output_url")
-                # In production, download the video
-                output_path = Path(f"/tmp/escribe_video_{job_id}.mp4")
-                return output_path
+                output_url = self._extract_output_url(result)
+                if not output_url:
+                    log.error("job_completed_without_output_url", extra={"job_id": job_id})
+                    return None
+                output_path = self._output_path("video", job_id, ".mp4")
+                return await self._download_output(output_url, output_path)
 
             elif status == "failed":
                 log.error("job_failed", extra={"job_id": job_id, "error": result.get("error")})
