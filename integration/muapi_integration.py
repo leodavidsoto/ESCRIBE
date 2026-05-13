@@ -5,10 +5,12 @@ Provides compatibility layer between master_orchestrator and Muapi gateway.
 """
 import asyncio
 import logging
+import threading
 from pathlib import Path
-from typing import Optional
+from typing import Coroutine, Optional, TypeVar
 
 log = logging.getLogger("muapi_integration")
+T = TypeVar("T")
 
 
 def _get_muapi_gateway():
@@ -19,6 +21,30 @@ def _get_muapi_gateway():
     except (ImportError, RuntimeError) as e:
         log.warning("muapi_gateway_not_available", extra={"error": str(e)})
         return None
+
+
+def _run_coro_sync(coro: Coroutine[object, object, T]) -> T:
+    """Run an async Muapi call from sync code without nesting event loops."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    result_box: dict[str, T] = {}
+    error_box: dict[str, BaseException] = {}
+
+    def _runner() -> None:
+        try:
+            result_box["result"] = asyncio.run(coro)
+        except BaseException as exc:  # noqa: BLE001
+            error_box["error"] = exc
+
+    thread = threading.Thread(target=_runner, daemon=True)
+    thread.start()
+    thread.join()
+    if error_box:
+        raise error_box["error"]
+    return result_box["result"]
 
 
 async def generate_image_async(
@@ -137,23 +163,7 @@ def generate_image(
     Returns:
         Path to generated image or None
     """
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # Already in async context, create task
-            task = asyncio.create_task(generate_image_async(prompt, model, image_input, width, height))
-            return loop.run_until_complete(task)
-        else:
-            # Create new event loop
-            return loop.run_until_complete(generate_image_async(prompt, model, image_input, width, height))
-    except RuntimeError:
-        # No event loop, create new one
-        new_loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(new_loop)
-        try:
-            return new_loop.run_until_complete(generate_image_async(prompt, model, image_input, width, height))
-        finally:
-            new_loop.close()
+    return _run_coro_sync(generate_image_async(prompt, model, image_input, width, height))
 
 
 def generate_video(
@@ -177,23 +187,7 @@ def generate_video(
     Returns:
         Path to generated video or None
     """
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # Already in async context, create task
-            task = asyncio.create_task(generate_video_async(prompt, image_input, model, duration, fps, resolution))
-            return loop.run_until_complete(task)
-        else:
-            # Run in existing loop
-            return loop.run_until_complete(generate_video_async(prompt, image_input, model, duration, fps, resolution))
-    except RuntimeError:
-        # No event loop, create new one
-        new_loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(new_loop)
-        try:
-            return new_loop.run_until_complete(generate_video_async(prompt, image_input, model, duration, fps, resolution))
-        finally:
-            new_loop.close()
+    return _run_coro_sync(generate_video_async(prompt, image_input, model, duration, fps, resolution))
 
 
 def get_available_models() -> dict:

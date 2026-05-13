@@ -40,6 +40,60 @@ import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+# ────────────────────────────────────────────────────────────────────────
+# Bootstrap paths (env vars con fallback relativo al working dir)
+# ────────────────────────────────────────────────────────────────────────
+
+_here = Path(__file__).resolve().parent
+GUION_EXPERT_DIR = Path(os.getenv("GUION_EXPERT_DIR") or (_here / "Guion_expert"))
+OPENMONTAGE_DIR = Path(os.getenv("OPENMONTAGE_DIR") or (_here / "OpenMontage" / "OpenMontage"))
+
+
+def _prepend_sys_path(path: Path) -> None:
+    path_str = str(path)
+    if path_str in sys.path:
+        sys.path.remove(path_str)
+    sys.path.insert(0, path_str)
+
+
+# Repo root must win for root packages such as providers/.
+for _path in (
+    GUION_EXPERT_DIR / "bridge",
+    GUION_EXPERT_DIR / "webapp",
+    GUION_EXPERT_DIR,
+    _here,
+):
+    _prepend_sys_path(_path)
+
+
+def _create_celery_app():
+    """Create the Celery app used by the Procfile worker when Celery exists."""
+    try:
+        from celery import Celery  # type: ignore
+    except ImportError:
+        class CeleryUnavailable:
+            main = "master_orchestrator"
+
+            def __repr__(self) -> str:
+                return "<Celery unavailable: install celery to run workers>"
+
+        return CeleryUnavailable()
+
+    broker_url = os.getenv("CELERY_BROKER_URL") or os.getenv("REDIS_URL") or "memory://"
+    result_backend = os.getenv("CELERY_RESULT_BACKEND") or os.getenv("REDIS_URL") or "cache+memory://"
+    app = Celery("master_orchestrator", broker=broker_url, backend=result_backend)
+    app.conf.update(
+        task_serializer="json",
+        accept_content=["json"],
+        result_serializer="json",
+        timezone=os.getenv("CELERY_TIMEZONE", "UTC"),
+        enable_utc=True,
+    )
+    return app
+
+
+celery_app = _create_celery_app()
+
 # Import CLIP validator for Flux feedback loop
 def _load_clip_validator():
     """Lazy load CLIP validator to avoid import failures if not needed."""
@@ -59,18 +113,6 @@ def _load_clip_validator():
         return None, False
 
 validate_flux_image, CLIP_AVAILABLE = _load_clip_validator()
-
-# ────────────────────────────────────────────────────────────────────────
-# Bootstrap paths (env vars con fallback relativo al working dir)
-# ────────────────────────────────────────────────────────────────────────
-
-_here = Path(__file__).resolve().parent
-GUION_EXPERT_DIR = Path(os.getenv("GUION_EXPERT_DIR") or (_here / "Guion_expert"))
-OPENMONTAGE_DIR = Path(os.getenv("OPENMONTAGE_DIR") or (_here / "OpenMontage" / "OpenMontage"))
-
-sys.path.insert(0, str(GUION_EXPERT_DIR))
-sys.path.insert(0, str(GUION_EXPERT_DIR / "webapp"))
-sys.path.insert(0, str(GUION_EXPERT_DIR / "bridge"))
 
 from webapp.pipeline_claude import run_full_pipeline  # noqa: E402
 from bridge.openmontage_export import export_project_to_openmontage  # noqa: E402

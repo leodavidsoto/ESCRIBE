@@ -9,8 +9,12 @@ from pathlib import Path
 
 # Ensure Guion_expert is importable
 guion_expert_path = Path(__file__).parent / "Guion_expert"
-if str(guion_expert_path) not in sys.path:
-    sys.path.insert(0, str(guion_expert_path))
+webapp_path = guion_expert_path / "webapp"
+for path in (guion_expert_path, webapp_path):
+    path_str = str(path)
+    if path_str in sys.path:
+        sys.path.remove(path_str)
+    sys.path.insert(0, path_str)
 
 # Import and re-export the Flask app
 try:

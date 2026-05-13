@@ -42,17 +42,17 @@ GRADING_PROFILES = {
     "noir_high_contrast": ColorGradingProfile(
         name="Noir High Contrast",
         description="High contrast black and white noir",
-        ffmpeg_filter="curves=r='0/0 0.5/0.4 1/1':g='0/0 0.5/0.4 1/1':b='0/0 0.5/0.4 1/1' | colorbalance=rs=-0.2:gs=-0.2:bs=-0.2",
+        ffmpeg_filter="curves=r='0/0 0.5/0.4 1/1':g='0/0 0.5/0.4 1/1':b='0/0 0.5/0.4 1/1',colorbalance=rs=-0.2:gs=-0.2:bs=-0.2",
     ),
     "vintage_faded": ColorGradingProfile(
         name="Vintage Faded",
         description="Faded vintage film look",
-        ffmpeg_filter="colorbalance=rs=0.15:gs=0.1:bs=-0.05 | curves=r='0/0.05 0.5/0.5 1/0.98':g='0/0.05 0.5/0.5 1/0.98':b='0/0.05 0.5/0.5 1/0.98'",
+        ffmpeg_filter="colorbalance=rs=0.15:gs=0.1:bs=-0.05,curves=r='0/0.05 0.5/0.5 1/0.98':g='0/0.05 0.5/0.5 1/0.98':b='0/0.05 0.5/0.5 1/0.98'",
     ),
     "bleach_bypass": ColorGradingProfile(
         name="Bleach Bypass",
         description="High saturation bleach bypass effect",
-        ffmpeg_filter="saturation=1.5 | colorbalance=rs=0.1:gs=0.05:bs=-0.1",
+        ffmpeg_filter="eq=saturation=1.5,colorbalance=rs=0.1:gs=0.05:bs=-0.1",
     ),
     "log_to_rec709": ColorGradingProfile(
         name="Log to Rec709",
@@ -62,17 +62,17 @@ GRADING_PROFILES = {
     "sepia": ColorGradingProfile(
         name="Sepia",
         description="Classic sepia tone",
-        ffmpeg_filter="hue=s=-0.5 | colorbalance=rs=0.2:gs=0.1:bs=-0.15",
+        ffmpeg_filter="hue=s=0,colorbalance=rs=0.2:gs=0.1:bs=-0.15",
     ),
     "low_saturation_cinematic": ColorGradingProfile(
         name="Low Saturation Cinematic",
         description="Desaturated cinematic look",
-        ffmpeg_filter="saturation=0.7 | curves=r='0/0 0.5/0.48 1/1':g='0/0 0.5/0.50 1/1':b='0/0 0.5/0.52 1/1'",
+        ffmpeg_filter="eq=saturation=0.7,curves=r='0/0 0.5/0.48 1/1':g='0/0 0.5/0.50 1/1':b='0/0 0.5/0.52 1/1'",
     ),
     "ultra_vivid": ColorGradingProfile(
         name="Ultra Vivid",
         description="Hyper-saturated vibrant colors",
-        ffmpeg_filter="saturation=1.8 | brightness=0.1 | contrast=1.2",
+        ffmpeg_filter="eq=saturation=1.8:brightness=0.1:contrast=1.2",
     ),
     "monochrome": ColorGradingProfile(
         name="Monochrome",
@@ -82,7 +82,7 @@ GRADING_PROFILES = {
     "retro_80s": ColorGradingProfile(
         name="Retro 80s",
         description="1980s color grading aesthetic",
-        ffmpeg_filter="colorbalance=rs=0.15:gs=-0.1:bs=0.2 | saturation=1.3 | curves=r='0/0.1 0.5/0.5 1/0.95':g='0/0.1 0.5/0.5 1/0.95':b='0/0.1 0.5/0.5 1/0.95'",
+        ffmpeg_filter="colorbalance=rs=0.15:gs=-0.1:bs=0.2,eq=saturation=1.3,curves=r='0/0.1 0.5/0.5 1/0.95':g='0/0.1 0.5/0.5 1/0.95':b='0/0.1 0.5/0.5 1/0.95'",
     ),
 }
 
@@ -111,10 +111,10 @@ class ColorGradingEngine:
             FFmpeg filter chain string
         """
         if profile_name not in self.profiles:
-            log.warning(f"Unknown profile: {profile_name}, using default")
-            profile = self.profiles["cinematic_default"]
-        else:
-            profile = self.profiles[profile_name]
+            log.warning(f"Unknown profile: {profile_name}")
+            return ""
+
+        profile = self.profiles[profile_name]
 
         base_filter = profile.ffmpeg_filter
         if not base_filter:
@@ -126,7 +126,7 @@ class ColorGradingEngine:
         elif intensity < 1.0:
             # Blend with identity filter (no-op)
             # This is simplified; in production, parse and scale curve values
-            return f"colorbalance=rs=0:gs=0:bs=0 | {base_filter}"
+            return f"colorbalance=rs=0:gs=0:bs=0,{base_filter}"
         else:
             # Double intensity (experimental - in production, use proper curve scaling)
             return base_filter

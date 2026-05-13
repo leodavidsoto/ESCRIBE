@@ -238,7 +238,8 @@ class TestMuapiGatewayJobPolling:
     @pytest.mark.asyncio
     async def test_poll_job_completion(self, gateway):
         """Test job polling on successful completion."""
-        with patch.object(gateway.client, "get", new_callable=AsyncMock) as mock_get:
+        with patch.object(gateway.client, "get", new_callable=AsyncMock) as mock_get, \
+             patch.object(gateway, "_download_output", new_callable=AsyncMock) as mock_download:
             # Mock completed job
             mock_response = MagicMock()
             mock_response.status_code = 200
@@ -247,10 +248,12 @@ class TestMuapiGatewayJobPolling:
                 "output_url": "https://example.com/video.mp4",
             }
             mock_get.return_value = mock_response
+            mock_download.return_value = Path("/tmp/escribe_video_test_job_id.mp4")
 
             result = await gateway._poll_job("test_job_id", "sora", timeout=30)
             assert result is not None
             assert "test_job_id" in str(result)
+            mock_download.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_poll_job_failure(self, gateway):

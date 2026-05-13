@@ -5,7 +5,7 @@ Supports vignette, lens flare, motion blur, glitch, bokeh, and more.
 """
 import logging
 from dataclasses import dataclass
-from typing import Literal, Optional
+from typing import Callable, Literal, Optional
 
 log = logging.getLogger("effects_engine")
 
@@ -15,8 +15,12 @@ class EffectDefinition:
     """Effect definition with FFmpeg filter."""
     name: str
     description: str
-    ffmpeg_filter_template: str  # Template with {intensity} placeholder
+    ffmpeg_filter_builder: Callable[[float], str]
     intensity_range: tuple[float, float] = (0.0, 1.0)
+
+
+def _fmt(value: float) -> str:
+    return f"{value:.4f}".rstrip("0").rstrip(".") or "0"
 
 
 # Predefined effects catalog
@@ -24,61 +28,77 @@ EFFECTS_CATALOG = {
     "vignette": EffectDefinition(
         name="Vignette",
         description="Darkened edges",
-        ffmpeg_filter_template="vignette=PI*{intensity}",
+        ffmpeg_filter_builder=lambda intensity: f"vignette=angle={_fmt(3.14159 * intensity)}",
         intensity_range=(0.0, 1.0),
     ),
     "lens_flare": EffectDefinition(
         name="Lens Flare",
-        description="Light lens flare effect",
-        ffmpeg_filter_template="lenscorrection=cx={{intensity}}:cy={{intensity}}",
+        description="Bright lens wash effect",
+        ffmpeg_filter_builder=lambda intensity: (
+            f"eq=brightness={_fmt(0.08 * intensity)}:saturation={_fmt(1 + 0.25 * intensity)}"
+        ),
         intensity_range=(0.0, 1.0),
     ),
     "chromatic_aberration": EffectDefinition(
         name="Chromatic Aberration",
         description="RGB color separation",
-        ffmpeg_filter_template="split[r][g][b];[r]scale=in_range=limited:out_range=limited[r];[g]null[g];[b]null[b];[r][g][b]scale=w=-1:h=-1[out]",
+        ffmpeg_filter_builder=lambda intensity: (
+            f"chromashift=cbh={int(round(8 * intensity))}:crh={int(round(-8 * intensity))}:edge=wrap"
+        ),
         intensity_range=(0.0, 1.0),
     ),
     "film_grain": EffectDefinition(
         name="Film Grain",
         description="Analog film grain texture",
-        ffmpeg_filter_template="noise=alls={intensity}*0.1:allf=t",
+        ffmpeg_filter_builder=lambda intensity: f"noise=alls={int(round(20 * intensity))}:allf=t",
         intensity_range=(0.0, 1.0),
     ),
     "motion_blur": EffectDefinition(
         name="Motion Blur",
-        description="Dynamic motion blur",
-        ffmpeg_filter_template="boxblur=lr={{intensity}*5:lh={{intensity}*5",
+        description="Soft directional blur",
+        ffmpeg_filter_builder=lambda intensity: f"boxblur=lr={_fmt(5 * intensity)}:lp=1",
         intensity_range=(0.0, 1.0),
     ),
     "glitch": EffectDefinition(
         name="Glitch",
         description="Digital glitch effect",
-        ffmpeg_filter_template="split[main][glitch];[glitch]scale=w=iw/{{1+intensity*10}}:h=ih[glitched];[main][glitched]overlay=x='if(eq(t\\,0)\\,0\\,rand()*w)':y='if(eq(t\\,0)\\,0\\,rand()*h)'",
+        ffmpeg_filter_builder=lambda intensity: (
+            f"rgbashift=rh={int(round(10 * intensity))}:bh={int(round(-10 * intensity))}:edge=wrap"
+        ),
         intensity_range=(0.0, 1.0),
     ),
     "bokeh_bloom": EffectDefinition(
         name="Bokeh Bloom",
         description="Soft bokeh bloom effect",
-        ffmpeg_filter_template="split[base][bloom];[bloom]boxblur=lr={{intensity*20}}:lh={{intensity*20}}[bloomed];[base][bloomed]overlay",
+        ffmpeg_filter_builder=lambda intensity: (
+            f"gblur=sigma={_fmt(4 * intensity)},eq=brightness={_fmt(0.06 * intensity)}"
+        ),
         intensity_range=(0.0, 1.0),
     ),
     "film_burn": EffectDefinition(
         name="Film Burn",
         description="Light leak film burn",
-        ffmpeg_filter_template="colorbalance=rs={{intensity*0.2}}:gs={{intensity*0.1}}:bs=-{{intensity*0.15}}",
+        ffmpeg_filter_builder=lambda intensity: (
+            f"colorbalance=rs={_fmt(0.2 * intensity)}:gs={_fmt(0.1 * intensity)}:"
+            f"bs={_fmt(-0.15 * intensity)},eq=brightness={_fmt(0.04 * intensity)}"
+        ),
         intensity_range=(0.0, 1.0),
     ),
     "dust_particles": EffectDefinition(
         name="Dust Particles",
         description="Floating dust particle effect",
-        ffmpeg_filter_template="noise=alls={{intensity*0.05}}:allf=t | boxblur=lr=2:lh=2",
+        ffmpeg_filter_builder=lambda intensity: (
+            f"noise=alls={int(round(12 * intensity))}:allf=t,boxblur=lr=2:lp=1"
+        ),
         intensity_range=(0.0, 1.0),
     ),
     "lens_distortion": EffectDefinition(
         name="Lens Distortion",
         description="Barrel or pincushion distortion",
-        ffmpeg_filter_template="lenscorrection=cx=0.5:cy=0.5:k1={{intensity*0.5}}:k2={{intensity*0.3}}",
+        ffmpeg_filter_builder=lambda intensity: (
+            f"lenscorrection=cx=0.5:cy=0.5:k1={_fmt(0.35 * intensity)}:"
+            f"k2={_fmt(0.15 * intensity)}"
+        ),
         intensity_range=(0.0, 1.0),
     ),
 }
@@ -114,11 +134,10 @@ class EffectsEngine:
         # Clamp intensity to range
         clamped = max(effect.intensity_range[0], min(effect.intensity_range[1], intensity))
 
-        # Format filter template
+        # Build filter string
         try:
-            filter_str = effect.ffmpeg_filter_template.format(intensity=clamped)
-            return filter_str
-        except (KeyError, ValueError) as e:
+            return effect.ffmpeg_filter_builder(clamped)
+        except (TypeError, ValueError) as e:
             log.error(f"filter_format_error: {e}")
             return None
 
@@ -144,7 +163,7 @@ class EffectsEngine:
             if filter_str:
                 filters.append(filter_str)
 
-        result = " | ".join(filters) if filters else ""
+        result = ",".join(filters) if filters else ""
         log.info("effects_chained", extra={"count": len(filters), "chain": result[:100]})
         return result
 

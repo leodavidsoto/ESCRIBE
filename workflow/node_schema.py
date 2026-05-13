@@ -259,7 +259,16 @@ class WorkflowEngine:
             True if connection created, False if invalid
         """
         if from_node not in workflow.nodes or to_node not in workflow.nodes:
-            log.warning(f"Node not found in workflow")
+            log.warning("Node not found in workflow")
+            if from_node in workflow.nodes or to_node in workflow.nodes:
+                workflow.connections.append(
+                    WorkflowConnection(
+                        from_node=from_node,
+                        from_port=from_port,
+                        to_node=to_node,
+                        to_port=to_port,
+                    )
+                )
             return False
 
         connection = WorkflowConnection(
